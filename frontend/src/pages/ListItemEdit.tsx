@@ -7,6 +7,8 @@ import {
   updateListItem,
   updateList,
   removeListItem,
+  getAutoAddRule,
+  upsertAutoAddRule,
 } from '../api/lists';
 import { getCategories, getProducts, updateProduct, createCategory } from '../api/products';
 import { uploadFile, ApiError } from '../api/client';
@@ -18,6 +20,7 @@ import { ImageSourceDialog } from '../components/ImageSourceDialog';
 import { EmojiPickerDialog } from '../components/EmojiPicker';
 import { createPortal } from 'react-dom';
 import type { ProductDto } from '../types';
+import { AUTO_ADD_UNIT_OPTIONS, formatNextRun } from '../utils/autoAdd';
 
 function getImageUrl(url: string | null): string {
   if (!url) return '';
@@ -56,8 +59,14 @@ export function ListItemEdit() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [unitSectionExpanded, setUnitSectionExpanded] = useState(false);
+  const [autoAddEnabled, setAutoAddEnabled] = useState(false);
+  const [autoAddQuantity, setAutoAddQuantity] = useState('1');
+  const [autoAddEveryN, setAutoAddEveryN] = useState('1');
+  const [autoAddUnit, setAutoAddUnit] = useState('WEEKS');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingHighlightRef = useRef<{ categoryId: string; itemId: string } | null>(null);
+  const pendingAutoAddRef = useRef<{ quantity: number; everyN: number; everyUnit: string; enabled: boolean } | null>(null);
+  const autoAddInitRef = useRef(false);
 
   const { data: list } = useQuery({
     queryKey: ['list', listId],
@@ -83,6 +92,12 @@ export function ListItemEdit() {
     enabled: !!list?.workspaceId,
   });
 
+  const { data: autoAddRule, isFetched: autoAddFetched } = useQuery({
+    queryKey: ['autoAdd', listId, itemId],
+    queryFn: () => getAutoAddRule(listId!, itemId!),
+    enabled: !!listId && !!itemId,
+  });
+
   const item = items.find((i) => i.id === itemId);
 
   useEffect(() => {
@@ -101,6 +116,46 @@ export function ListItemEdit() {
     }
   }, [item]);
 
+  useEffect(() => {
+    if (autoAddRule) {
+      setAutoAddEnabled(autoAddRule.enabled);
+      setAutoAddQuantity(String(autoAddRule.quantity));
+      setAutoAddEveryN(String(autoAddRule.everyN));
+      setAutoAddUnit(autoAddRule.everyUnit);
+      autoAddInitRef.current = true;
+    } else if (item && !autoAddInitRef.current) {
+      setAutoAddQuantity(String(item.quantity));
+    }
+  }, [autoAddRule, item]);
+
+  function finishItemSave() {
+    setIsSaving(false);
+    setSaveError(null);
+    queryClient.invalidateQueries({ queryKey: ['listItems', listId] });
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+    const highlight = pendingHighlightRef.current;
+    pendingHighlightRef.current = null;
+    if (highlight) {
+      navigate(`/lists/${listId}`, { state: { highlightCategoryId: highlight.categoryId, highlightItemId: highlight.itemId } });
+    } else {
+      navigate(`/lists/${listId}`);
+    }
+  }
+
+  const autoAddMutation = useMutation({
+    mutationFn: (body: { quantity: number; everyN: number; everyUnit: string; enabled: boolean }) =>
+      upsertAutoAddRule(listId!, itemId!, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['autoAdd', listId, itemId] });
+      finishItemSave();
+    },
+    onError: (err: Error) => {
+      setIsSaving(false);
+      queryClient.invalidateQueries({ queryKey: ['autoAdd', listId, itemId] });
+      setSaveError(err instanceof ApiError ? err.message : err.message || 'שגיאה בשמירת הוספה אוטומטית');
+    },
+  });
+
   const updateMutation = useMutation({
     mutationFn: ({
       body,
@@ -108,20 +163,17 @@ export function ListItemEdit() {
       body: { crossedOff?: boolean; quantity?: number; unit?: string; note?: string; itemImageUrl?: string | null; iconId?: string | null; categoryId?: string; clearCategory?: boolean; version?: number; customNameHe?: string };
     }) => updateListItem(listId!, itemId!, body),
     onSuccess: () => {
-      setIsSaving(false);
-      setSaveError(null);
-      queryClient.invalidateQueries({ queryKey: ['listItems', listId] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      const highlight = pendingHighlightRef.current;
-      pendingHighlightRef.current = null;
-      if (highlight) {
-        navigate(`/lists/${listId}`, { state: { highlightCategoryId: highlight.categoryId, highlightItemId: highlight.itemId } });
+      const autoAddBody = pendingAutoAddRef.current;
+      pendingAutoAddRef.current = null;
+      if (autoAddBody) {
+        autoAddMutation.mutate(autoAddBody);
       } else {
-        navigate(`/lists/${listId}`);
+        finishItemSave();
       }
     },
     onError: (err: Error) => {
       setIsSaving(false);
+      pendingAutoAddRef.current = null;
       queryClient.invalidateQueries({ queryKey: ['listItems', listId] });
       setSaveError(err instanceof ApiError ? err.message : err.message || 'שגיאה בשמירה');
     },
@@ -148,6 +200,18 @@ export function ListItemEdit() {
     e.preventDefault();
     setSaveError(null);
     if (!item || !listId || !itemId) return;
+    if (autoAddEnabled) {
+      const autoQty = parseFloat(autoAddQuantity);
+      const autoEvery = parseInt(autoAddEveryN, 10);
+      if (isNaN(autoQty) || autoQty <= 0) {
+        setSaveError('כמות להוספה חייבת להיות מספר חיובי');
+        return;
+      }
+      if (isNaN(autoEvery) || autoEvery < 1) {
+        setSaveError('תדירות חייבת להיות מספר חיובי');
+        return;
+      }
+    }
     setIsSaving(true);
     let effectiveCategoryId = categoryId;
     if (categoryId === '__new__' && newCategoryName.trim() && list?.workspaceId) {
@@ -226,9 +290,26 @@ export function ListItemEdit() {
       const targetCategoryId = effectiveCategoryId || '';
       pendingHighlightRef.current = { categoryId: targetCategoryId, itemId: itemId! };
     }
+    if (autoAddFetched && isAutoAddDirty()) {
+      pendingAutoAddRef.current = {
+        quantity: autoAddEnabled ? parseFloat(autoAddQuantity) : Number(autoAddRule?.quantity ?? item.quantity),
+        everyN: autoAddEnabled ? parseInt(autoAddEveryN, 10) : (autoAddRule?.everyN ?? 1),
+        everyUnit: autoAddEnabled ? autoAddUnit : (autoAddRule?.everyUnit ?? 'WEEKS'),
+        enabled: autoAddEnabled,
+      };
+    }
     updateMutation.mutate({
       body: body as { version?: number; quantity?: number; unit?: string; showQuantityUnit?: boolean; note?: string; categoryId?: string; clearCategory?: boolean; itemImageUrl?: string | null; iconId?: string | null; customNameHe?: string },
     });
+  }
+
+  function isAutoAddDirty(): boolean {
+    if (!item) return false;
+    if (autoAddEnabled !== (autoAddRule?.enabled ?? false)) return true;
+    if (!autoAddEnabled) return false;
+    if (String(parseFloat(autoAddQuantity) || 0) !== String(autoAddRule?.quantity ?? item.quantity)) return true;
+    if (String(parseInt(autoAddEveryN, 10) || 0) !== String(autoAddRule?.everyN ?? 1)) return true;
+    return autoAddUnit !== (autoAddRule?.everyUnit ?? 'WEEKS');
   }
 
   function handleImageFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -276,7 +357,8 @@ export function ListItemEdit() {
     unitSectionExpanded !== initialUnitSectionExpanded ||
     displayImageType !== initialDisplayType ||
     (displayImageType === 'icon' && (iconId || '') !== initialIconId) ||
-    (isLinkOrWeb && (imageUrl.trim() || '') !== (initialImageUrl || '').trim());
+    (isLinkOrWeb && (imageUrl.trim() || '') !== (initialImageUrl || '').trim()) ||
+    (autoAddFetched && isAutoAddDirty());
 
   const currentImageUrl = imageUrl.trim() || (item.itemImageUrl || item.productImageUrl || '');
   const showImage = isLinkOrWeb ? currentImageUrl : null;
@@ -501,6 +583,139 @@ export function ListItemEdit() {
               )}
             </div>
           )}
+          <div style={{ border: '1px solid #e0e0e0', borderRadius: 12, padding: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={autoAddEnabled}
+                onChange={(e) => setAutoAddEnabled(e.target.checked)}
+                data-testid="auto-add-toggle"
+                style={{ width: 20, height: 20, accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+              />
+              תדירות הוספה אוטומטית
+            </label>
+            {autoAddEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 4, fontSize: 14 }}>כמות להוספה</label>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const n = parseFloat(autoAddQuantity) || 1;
+                        if (n > 1) setAutoAddQuantity(String(n - 1));
+                      }}
+                      aria-label="הפחת כמות להוספה"
+                      style={{
+                        width: 36, height: 40, border: '1px solid #ccc', borderRadius: '8px 0 0 8px',
+                        background: '#f5f5f5', cursor: 'pointer', fontSize: 18, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      −
+                    </button>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={autoAddQuantity}
+                      onChange={(e) => setAutoAddQuantity(e.target.value)}
+                      onBlur={() => {
+                        const n = parseFloat(autoAddQuantity);
+                        if (isNaN(n) || n <= 0) setAutoAddQuantity('1');
+                      }}
+                      data-testid="auto-add-quantity"
+                      aria-label="כמות להוספה"
+                      style={{
+                        width: 56, height: 40, border: '1px solid #ccc', borderLeft: 'none', borderRight: 'none',
+                        textAlign: 'center', fontSize: 16, padding: 0, boxSizing: 'border-box',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const n = parseFloat(autoAddQuantity) || 0;
+                        setAutoAddQuantity(String(n + 1));
+                      }}
+                      aria-label="הוסף כמות להוספה"
+                      style={{
+                        width: 36, height: 40, border: '1px solid #ccc', borderRadius: '0 8px 8px 0',
+                        background: '#f5f5f5', cursor: 'pointer', fontSize: 18, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 4, fontSize: 14 }}>כל</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = parseInt(autoAddEveryN, 10) || 1;
+                          if (n > 1) setAutoAddEveryN(String(n - 1));
+                        }}
+                        aria-label="הפחת תדירות"
+                        style={{
+                          width: 36, height: 40, border: '1px solid #ccc', borderRadius: '8px 0 0 8px',
+                          background: '#f5f5f5', cursor: 'pointer', fontSize: 18, display: 'flex',
+                          alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        −
+                      </button>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={autoAddEveryN}
+                        onChange={(e) => setAutoAddEveryN(e.target.value)}
+                        onBlur={() => {
+                          const n = parseInt(autoAddEveryN, 10);
+                          if (isNaN(n) || n < 1) setAutoAddEveryN('1');
+                        }}
+                        data-testid="auto-add-every"
+                        aria-label="תדירות"
+                        style={{
+                          width: 56, height: 40, border: '1px solid #ccc', borderLeft: 'none', borderRight: 'none',
+                          textAlign: 'center', fontSize: 16, padding: 0, boxSizing: 'border-box',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = parseInt(autoAddEveryN, 10) || 0;
+                          setAutoAddEveryN(String(n + 1));
+                        }}
+                        aria-label="הגבר תדירות"
+                        style={{
+                          width: 36, height: 40, border: '1px solid #ccc', borderRadius: '0 8px 8px 0',
+                          background: '#f5f5f5', cursor: 'pointer', fontSize: 18, display: 'flex',
+                          alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        +
+                      </button>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <CustomSelect
+                        value={autoAddUnit}
+                        onChange={setAutoAddUnit}
+                        aria-label="יחידת זמן"
+                        options={AUTO_ADD_UNIT_OPTIONS}
+                      />
+                    </div>
+                  </div>
+                </div>
+                {autoAddRule?.enabled && autoAddRule.nextRunAt && (
+                  <div data-testid="auto-add-next-run" style={{ fontSize: 13, color: '#666' }}>
+                    הוספה הבאה: {formatNextRun(autoAddRule.nextRunAt)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -516,19 +731,19 @@ export function ListItemEdit() {
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               type="submit"
-              disabled={isSaving || updateMutation.isPending || !hasChanges}
+              disabled={isSaving || updateMutation.isPending || autoAddMutation.isPending || !hasChanges}
               style={{
                 flex: 1,
                 padding: 12,
-                background: isSaving || updateMutation.isPending || !hasChanges ? '#ccc' : 'var(--color-primary)',
-                color: isSaving || updateMutation.isPending || !hasChanges ? '#666' : '#fff',
+                background: isSaving || updateMutation.isPending || autoAddMutation.isPending || !hasChanges ? '#ccc' : 'var(--color-primary)',
+                color: isSaving || updateMutation.isPending || autoAddMutation.isPending || !hasChanges ? '#666' : '#fff',
                 fontWeight: 600,
                 borderRadius: 8,
                 border: 'none',
-                cursor: isSaving || updateMutation.isPending || !hasChanges ? 'not-allowed' : 'pointer',
+                cursor: isSaving || updateMutation.isPending || autoAddMutation.isPending || !hasChanges ? 'not-allowed' : 'pointer',
               }}
             >
-              {isSaving || updateMutation.isPending ? 'שומר...' : 'שמור'}
+              {isSaving || updateMutation.isPending || autoAddMutation.isPending ? 'שומר...' : 'שמור'}
             </button>
             <button
               type="button"

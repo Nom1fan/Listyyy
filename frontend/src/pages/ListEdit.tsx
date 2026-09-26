@@ -5,6 +5,7 @@ import { getList, updateList, deleteList } from '../api/lists';
 import { getCategories } from '../api/products';
 import { uploadFile } from '../api/client';
 import { AppBar } from '../components/AppBar';
+import { AutoAddSettings } from '../components/AutoAddSettings';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { CategoryAttachPicker } from '../components/CategoryAttachPicker';
 import type { DisplayImageType } from '../components/DisplayImageForm';
@@ -280,6 +281,8 @@ export function ListEdit() {
             </button>
           </div>
         </form>
+
+        {listId && <AutoAddSettings listId={listId} />}
 
         {confirmDelete && (
           <div

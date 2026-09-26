@@ -4,6 +4,7 @@ import com.listyyy.backend.auth.User;
 import com.listyyy.backend.exception.AccessDeniedException;
 import com.listyyy.backend.exception.ResourceNotFoundException;
 import com.listyyy.backend.exception.VersionCheck;
+import com.listyyy.backend.list.ListItemAutoAddRuleRepository;
 import com.listyyy.backend.list.ListItemRepository;
 import com.listyyy.backend.websocket.WorkspaceEvent;
 import com.listyyy.backend.websocket.WorkspaceEventPublisher;
@@ -30,6 +31,7 @@ public class ProductController {
     private final CategoryRepository categoryRepository;
     private final CategoryAccessService categoryAccessService;
     private final ListItemRepository listItemRepository;
+    private final ListItemAutoAddRuleRepository autoAddRuleRepository;
     private final WorkspaceEventPublisher workspaceEventPublisher;
 
     @GetMapping
@@ -120,6 +122,7 @@ public class ProductController {
         // Remove any list items referencing this product before deleting,
         // to avoid violating the name_from_product_or_custom check constraint.
         listItemRepository.deleteByProductId(id);
+        autoAddRuleRepository.deleteByProductId(id);
         productRepository.delete(p);
         workspaceEventPublisher.publish(wsId, WorkspaceEvent.EntityType.PRODUCT,
                 WorkspaceEvent.Action.DELETED, id, name, user);

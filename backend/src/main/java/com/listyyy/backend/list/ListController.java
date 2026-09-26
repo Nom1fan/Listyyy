@@ -19,6 +19,7 @@ public class ListController {
 
     private final GroceryListService listService;
     private final ListItemService listItemService;
+    private final ListItemAutoAddService autoAddService;
 
     @GetMapping
     public ResponseEntity<List<ListResponse>> list(
@@ -153,6 +154,85 @@ public class ListController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/{listId}/auto-add")
+    public ResponseEntity<List<AutoAddRuleResponse>> listAutoAddRules(
+            @PathVariable UUID listId,
+            @AuthenticationPrincipal User user
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        List<AutoAddRuleResponse> body = autoAddService.listForList(listId, user).stream()
+                .map(this::toAutoAddResponse)
+                .toList();
+        return ResponseEntity.ok(body);
+    }
+
+    @PostMapping("/{listId}/auto-add")
+    public ResponseEntity<AutoAddRuleResponse> createAutoAddRule(
+            @PathVariable UUID listId,
+            @AuthenticationPrincipal User user,
+            @RequestBody AutoAddRuleCreateRequest req
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        ListItemAutoAddRule rule = autoAddService.createForList(listId, user, req);
+        return ResponseEntity.ok(toAutoAddResponse(rule));
+    }
+
+    @PutMapping("/{listId}/auto-add/{ruleId}")
+    public ResponseEntity<AutoAddRuleResponse> updateAutoAddRule(
+            @PathVariable UUID listId,
+            @PathVariable UUID ruleId,
+            @AuthenticationPrincipal User user,
+            @RequestBody AutoAddRuleRequest req
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        ListItemAutoAddRule rule = autoAddService.updateRule(listId, ruleId, user, req);
+        return ResponseEntity.ok(toAutoAddResponse(rule));
+    }
+
+    @DeleteMapping("/{listId}/auto-add/{ruleId}")
+    public ResponseEntity<Void> deleteAutoAddRuleById(
+            @PathVariable UUID listId,
+            @PathVariable UUID ruleId,
+            @AuthenticationPrincipal User user
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        autoAddService.deleteRule(listId, ruleId, user);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/{listId}/items/{itemId}/auto-add")
+    public ResponseEntity<AutoAddRuleResponse> getAutoAddRule(
+            @PathVariable UUID listId,
+            @PathVariable UUID itemId,
+            @AuthenticationPrincipal User user
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        return ResponseEntity.of(autoAddService.getForItem(listId, itemId, user).map(this::toAutoAddResponse));
+    }
+
+    @PutMapping("/{listId}/items/{itemId}/auto-add")
+    public ResponseEntity<AutoAddRuleResponse> upsertAutoAddRule(
+            @PathVariable UUID listId,
+            @PathVariable UUID itemId,
+            @AuthenticationPrincipal User user,
+            @RequestBody AutoAddRuleRequest req
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        ListItemAutoAddRule rule = autoAddService.upsertForItem(listId, itemId, user, req);
+        return ResponseEntity.ok(toAutoAddResponse(rule));
+    }
+
+    @DeleteMapping("/{listId}/items/{itemId}/auto-add")
+    public ResponseEntity<Void> deleteAutoAddRule(
+            @PathVariable UUID listId,
+            @PathVariable UUID itemId,
+            @AuthenticationPrincipal User user
+    ) {
+        if (user == null) return ResponseEntity.status(401).build();
+        autoAddService.deleteForItem(listId, itemId, user);
+        return ResponseEntity.noContent().build();
+    }
+
     private ListResponse toListResponse(GroceryList list, long itemCount) {
         List<UUID> categoryIds = list.getCategories().stream()
                 .map(Category::getId)
@@ -169,6 +249,22 @@ public class ListController {
                 .updatedAt(list.getUpdatedAt())
                 .version(list.getVersion())
                 .itemCount((int) itemCount)
+                .build();
+    }
+
+    private AutoAddRuleResponse toAutoAddResponse(ListItemAutoAddRule rule) {
+        return AutoAddRuleResponse.builder()
+                .id(rule.getId())
+                .listId(rule.getList().getId())
+                .productId(rule.getProduct() != null ? rule.getProduct().getId() : null)
+                .customNameHe(rule.getCustomNameHe())
+                .quantity(rule.getQuantity())
+                .unit(rule.getUnit())
+                .everyN(rule.getEveryN())
+                .everyUnit(rule.getEveryUnit())
+                .enabled(rule.isEnabled())
+                .nextRunAt(rule.getNextRunAt())
+                .version(rule.getVersion())
                 .build();
     }
 

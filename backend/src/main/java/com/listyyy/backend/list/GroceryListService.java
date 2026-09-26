@@ -26,6 +26,7 @@ public class GroceryListService {
 
     private final GroceryListRepository listRepository;
     private final ListItemRepository listItemRepository;
+    private final ListItemAutoAddRuleRepository autoAddRuleRepository;
     private final ListAccessService listAccessService;
     private final CategoryRepository categoryRepository;
     private final WorkspaceRepository workspaceRepository;
@@ -121,6 +122,7 @@ public class GroceryListService {
         String name = list.getName();
         // Delete children first to stay portable across DBs (H2 tests don't have ON DELETE CASCADE).
         listItemRepository.deleteByListId(listId);
+        autoAddRuleRepository.deleteByListId(listId);
         listRepository.removeListCategoryEntriesByListId(listId);
         listRepository.delete(list);
         workspaceEventPublisher.publish(wsId, WorkspaceEvent.EntityType.LIST,

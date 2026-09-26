@@ -120,6 +120,22 @@ export interface UserEvent {
   workspaceId?: string;
 }
 
+export type AutoAddUnit = 'DAYS' | 'WEEKS' | 'MONTHS' | 'YEARS';
+
+export interface AutoAddRuleResponse {
+  id: string;
+  listId: string;
+  productId: string | null;
+  customNameHe: string | null;
+  quantity: number;
+  unit: string;
+  everyN: number;
+  everyUnit: AutoAddUnit;
+  enabled: boolean;
+  nextRunAt: string | null;
+  version: number;
+}
+
 export interface ListMemberDto {
   userId: string;
   displayName: string | null;

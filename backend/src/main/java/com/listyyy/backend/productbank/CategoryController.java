@@ -4,6 +4,7 @@ import com.listyyy.backend.auth.User;
 import com.listyyy.backend.exception.AccessDeniedException;
 import com.listyyy.backend.exception.VersionCheck;
 import com.listyyy.backend.list.GroceryListRepository;
+import com.listyyy.backend.list.ListItemAutoAddRuleRepository;
 import com.listyyy.backend.list.ListItemRepository;
 import com.listyyy.backend.websocket.WorkspaceEvent;
 import com.listyyy.backend.websocket.WorkspaceEventPublisher;
@@ -31,6 +32,7 @@ public class CategoryController {
     private final CategoryAccessService categoryAccessService;
     private final ProductRepository productRepository;
     private final ListItemRepository listItemRepository;
+    private final ListItemAutoAddRuleRepository autoAddRuleRepository;
     private final GroceryListRepository groceryListRepository;
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceAccessService workspaceAccessService;
@@ -151,6 +153,8 @@ public class CategoryController {
         // Explicitly remove list items, products, and list-category attachments
         // before deleting the category, for H2 test compatibility (no ON DELETE CASCADE).
         listItemRepository.deleteByProductCategoryId(id);
+        autoAddRuleRepository.deleteByProductCategoryId(id);
+        autoAddRuleRepository.clearCategoryReferences(id);
         productRepository.findByCategoryIdOrderByNameHe(id)
                 .forEach(p -> productRepository.delete(p));
         groceryListRepository.removeListCategoryEntriesByCategoryId(id);

@@ -26,6 +26,7 @@ import {
   removeListItem,
   deleteList,
   reorderListItems,
+  listAutoAddRules,
 } from '../api/lists';
 import { getCategories, getProducts } from '../api/products';
 import { useListEvents } from '../hooks/useListEvents';
@@ -37,7 +38,8 @@ import { PlaintextListDialog } from '../components/PlaintextListDialog';
 import { ProductBankView } from '../components/ProductBankView';
 import { ViewModeToggle, useViewMode } from '../components/ViewModeToggle';
 import { getFilteredProducts } from '../utils/categoryFilter';
-import type { ListItemResponse, ListEvent, WorkspaceEvent, ProductDto } from '../types';
+import type { ListItemResponse, ListEvent, WorkspaceEvent, ProductDto, AutoAddRuleResponse } from '../types';
+import { formatRuleSummary, formatNextRun, findRuleForItem } from '../utils/autoAdd';
 
 /** Returns the string to show for quantity+unit, or null to hide. Shows "1 יחידה" when item.showQuantityUnit. */
 function formatQuantityUnit(item: ListItemResponse): string | null {
@@ -94,6 +96,83 @@ function PencilIcon({ size = 18, color = '#666' }: { size?: number; color?: stri
       <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
       <path d="m15 5 4 4" />
     </svg>
+  );
+}
+
+/** Clock indicator for items with an automatic replenishment rule (indication only, not a button). */
+function ClockIcon({ size = 18, color = '#2e7d32' }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  );
+}
+
+/** Delay before the auto-add tooltip appears (much snappier than the native `title` tooltip). */
+const AUTO_ADD_TOOLTIP_DELAY_MS = 250;
+
+/** Green clock badge marking an auto-add rule; hover shows the rule definition. */
+function AutoAddBadge({ rule, size = 18 }: { rule: AutoAddRuleResponse | undefined; size?: number }) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const showTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (showTimer.current !== null) window.clearTimeout(showTimer.current);
+  }, []);
+
+  if (!rule) return null;
+  const tip = rule.enabled
+    ? `הוספה אוטומטית: ${formatRuleSummary(rule)}${rule.nextRunAt ? ` · הבאה: ${formatNextRun(rule.nextRunAt)}` : ''}`
+    : `הוספה אוטומטית מושהית: ${formatRuleSummary(rule)}`;
+
+  function handleMouseEnter() {
+    if (showTimer.current !== null) window.clearTimeout(showTimer.current);
+    showTimer.current = window.setTimeout(() => setTooltipVisible(true), AUTO_ADD_TOOLTIP_DELAY_MS);
+  }
+
+  function handleMouseLeave() {
+    if (showTimer.current !== null) {
+      window.clearTimeout(showTimer.current);
+      showTimer.current = null;
+    }
+    setTooltipVisible(false);
+  }
+
+  return (
+    <span
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      aria-label={tip}
+      data-testid="auto-add-badge"
+      style={{ position: 'relative', display: 'flex', alignItems: 'center', flexShrink: 0, lineHeight: 1 }}
+    >
+      <ClockIcon size={size} />
+      {tooltipVisible && (
+        <span
+          role="tooltip"
+          data-testid="auto-add-tooltip"
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 6px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#333',
+            color: '#fff',
+            fontSize: 12,
+            padding: '6px 10px',
+            borderRadius: 8,
+            maxWidth: 220,
+            textAlign: 'center',
+            lineHeight: 1.5,
+            zIndex: 50,
+            pointerEvents: 'none',
+          }}
+        >
+          {tip}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -214,6 +293,13 @@ export function ListDetail() {
     enabled: !!list?.workspaceId,
   });
 
+  const { data: autoAddRulesData } = useQuery({
+    queryKey: ['autoAddRules', listId],
+    queryFn: () => listAutoAddRules(listId),
+    enabled: !!listId,
+  });
+  const autoAddRules = Array.isArray(autoAddRulesData) ? autoAddRulesData : [];
+
   const filteredProducts = getFilteredProducts(allProducts, list);
   const hasCrossedOff = items.some(i => i.crossedOff);
 
@@ -225,6 +311,8 @@ export function ListDetail() {
 
   useListEvents(listId ?? null, useCallback((event: ListEvent) => {
     queryClient.invalidateQueries({ queryKey: ['listItems', listId] });
+    // A changed item can change badge matching (added/renamed/removed), so refresh rules together.
+    queryClient.invalidateQueries({ queryKey: ['autoAddRules', listId] });
     const who = event.userDisplayName || 'מישהו';
     const what = event.itemDisplayName + ' ' + event.quantityUnit;
     if (event.type === 'ADDED') showNotification(`${who} הוסיף: ${what}`);
@@ -240,10 +328,12 @@ export function ListDetail() {
     if (event.entityType === 'CATEGORY') {
       queryClient.invalidateQueries({ queryKey: ['categories'] });
       queryClient.invalidateQueries({ queryKey: ['listItems', listId] });
+      queryClient.invalidateQueries({ queryKey: ['autoAddRules', listId] });
     }
     if (event.entityType === 'PRODUCT') {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['listItems', listId] });
+      queryClient.invalidateQueries({ queryKey: ['autoAddRules', listId] });
     }
   }, [listId, queryClient]));
 
@@ -1114,6 +1204,7 @@ export function ListDetail() {
                         </div>
                       )}
                       </div>
+                      <AutoAddBadge rule={findRuleForItem(autoAddRules, item)} />
                       <button
                         type="button"
                         onClick={() => navigate(`/lists/${listId}/items/${item.id}/edit`)}
@@ -1189,6 +1280,7 @@ export function ListDetail() {
                           {item.note}
                         </span>
                       )}
+                      <AutoAddBadge rule={findRuleForItem(autoAddRules, item)} size={14} />
                       <button
                         type="button"
                         onClick={() => navigate(`/lists/${listId}/items/${item.id}/edit`)}
@@ -1245,6 +1337,7 @@ export function ListDetail() {
                           aria-label={item.crossedOff ? 'בטל סימון' : 'סימן'}
                         />
                         <span {...handleProps} style={{ cursor: 'grab', touchAction: 'none', color: '#bbb', fontSize: 16, lineHeight: 1 }} aria-label="גרור לשינוי סדר">⠿</span>
+                        <AutoAddBadge rule={findRuleForItem(autoAddRules, item)} size={14} />
                         <button
                           type="button"
                           onClick={() => navigate(`/lists/${listId}/items/${item.id}/edit`)}
@@ -1434,6 +1527,7 @@ export function ListDetail() {
                         </div>
                       )}
                       </div>
+                      <AutoAddBadge rule={findRuleForItem(autoAddRules, item)} />
                       <button
                         type="button"
                         onClick={() => navigate(`/lists/${listId}/items/${item.id}/edit`)}
@@ -1509,6 +1603,7 @@ export function ListDetail() {
                           {item.note}
                         </span>
                       )}
+                      <AutoAddBadge rule={findRuleForItem(autoAddRules, item)} size={14} />
                       <button
                         type="button"
                         onClick={() => navigate(`/lists/${listId}/items/${item.id}/edit`)}
@@ -1565,6 +1660,7 @@ export function ListDetail() {
                           aria-label="בטל סימון"
                         />
                         <span {...handleProps} style={{ cursor: 'grab', touchAction: 'none', color: '#bbb', fontSize: 16, lineHeight: 1 }} aria-label="גרור לשינוי סדר">⠿</span>
+                        <AutoAddBadge rule={findRuleForItem(autoAddRules, item)} size={14} />
                         <button
                           type="button"
                           onClick={() => navigate(`/lists/${listId}/items/${item.id}/edit`)}

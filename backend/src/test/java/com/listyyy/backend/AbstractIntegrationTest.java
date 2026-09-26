@@ -6,6 +6,7 @@ import com.listyyy.backend.auth.RefreshTokenRepository;
 import com.listyyy.backend.auth.User;
 import com.listyyy.backend.auth.UserRepository;
 import com.listyyy.backend.list.GroceryListRepository;
+import com.listyyy.backend.list.ListItemAutoAddRuleRepository;
 import com.listyyy.backend.list.ListItemRepository;
 import com.listyyy.backend.productbank.Category;
 import com.listyyy.backend.productbank.CategoryRepository;
@@ -63,6 +64,8 @@ public abstract class AbstractIntegrationTest {
     @Autowired
     protected ListItemRepository listItemRepository;
     @Autowired
+    protected ListItemAutoAddRuleRepository autoAddRuleRepository;
+    @Autowired
     protected GroceryListRepository listRepository;
     @Autowired
     protected RefreshTokenRepository refreshTokenRepository;
@@ -81,6 +84,7 @@ public abstract class AbstractIntegrationTest {
 
     @BeforeEach
     void baseSetUp() throws Exception {
+        autoAddRuleRepository.deleteAll();
         listItemRepository.deleteAll();
         listRepository.deleteAll();
         phoneOtpRepository.deleteAll();

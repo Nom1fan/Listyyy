@@ -1,5 +1,5 @@
-import { api } from './client';
-import type { ListResponse, ListItemResponse } from '../types';
+import { api, ApiError } from './client';
+import type { ListResponse, ListItemResponse, AutoAddRuleResponse } from '../types';
 
 export async function getLists(workspaceId?: string): Promise<ListResponse[]> {
   const params = new URLSearchParams();
@@ -107,4 +107,75 @@ export async function reorderListItems(listId: string, itemIds: string[]): Promi
     method: 'PUT',
     body: JSON.stringify({ itemIds }),
   });
+}
+
+export async function getAutoAddRule(listId: string, itemId: string): Promise<AutoAddRuleResponse | null> {
+  try {
+    return await api<AutoAddRuleResponse>(`/api/lists/${listId}/items/${itemId}/auto-add`);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+export async function upsertAutoAddRule(
+  listId: string,
+  itemId: string,
+  body: {
+    quantity?: number;
+    everyN?: number;
+    everyUnit?: string;
+    enabled?: boolean;
+  }
+): Promise<AutoAddRuleResponse> {
+  return api<AutoAddRuleResponse>(`/api/lists/${listId}/items/${itemId}/auto-add`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteAutoAddRule(listId: string, itemId: string): Promise<void> {
+  return api<void>(`/api/lists/${listId}/items/${itemId}/auto-add`, { method: 'DELETE' });
+}
+
+export async function listAutoAddRules(listId: string): Promise<AutoAddRuleResponse[]> {
+  return api<AutoAddRuleResponse[]>(`/api/lists/${listId}/auto-add`);
+}
+
+export async function createAutoAddRule(
+  listId: string,
+  body: {
+    productId?: string;
+    customNameHe?: string;
+    categoryId?: string;
+    quantity?: number;
+    everyN?: number;
+    everyUnit?: string;
+    enabled?: boolean;
+  }
+): Promise<AutoAddRuleResponse> {
+  return api<AutoAddRuleResponse>(`/api/lists/${listId}/auto-add`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateAutoAddRule(
+  listId: string,
+  ruleId: string,
+  body: {
+    quantity?: number;
+    everyN?: number;
+    everyUnit?: string;
+    enabled?: boolean;
+  }
+): Promise<AutoAddRuleResponse> {
+  return api<AutoAddRuleResponse>(`/api/lists/${listId}/auto-add/${ruleId}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteAutoAddRuleById(listId: string, ruleId: string): Promise<void> {
+  return api<void>(`/api/lists/${listId}/auto-add/${ruleId}`, { method: 'DELETE' });
 }

@@ -1731,6 +1731,57 @@ describe('ListDetail', () => {
     })
   })
 
+  describe('search autocomplete scoped to attached categories', () => {
+    const scopedProducts = [
+      { id: 'p-dairy', categoryId: 'c1', categoryNameHe: 'מוצרי חלב', categoryIconId: 'dairy', nameHe: 'חלב סויה', defaultUnit: 'ליטר', imageUrl: null, iconId: null, note: null, addCount: 0, version: 0 },
+      { id: 'p-vegan', categoryId: 'c2', categoryNameHe: 'טבעוני', categoryIconId: null, nameHe: 'חלב שקדים', defaultUnit: 'ליטר', imageUrl: null, iconId: null, note: null, addCount: 0, version: 0 },
+    ]
+
+    it('suggests only products from attached categories', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+      fetchMock.mockImplementation((url: string) => {
+        if (url.includes('/api/lists/list1/items')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) })
+        }
+        if (url.includes('/api/lists/list1')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ...mockList, categoryIds: ['c1'], version: 1 }),
+          })
+        }
+        if (url.includes('/api/categories')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) })
+        }
+        if (url.includes('/api/products')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(scopedProducts) })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) })
+      })
+
+      queryClient.setQueryData(['list', 'list1'], { ...mockList, categoryIds: ['c1'], version: 1 })
+      queryClient.setQueryData(['listItems', 'list1'], [])
+      queryClient.setQueryData(['products'], scopedProducts)
+
+      render(
+        <Wrapper>
+          <ListDetail />
+        </Wrapper>
+      )
+
+      const searchInput = await screen.findByPlaceholderText('הוסף / חפש פריט')
+      await act(async () => {
+        fireEvent.change(searchInput, { target: { value: 'חלב' } })
+      })
+
+      await waitFor(() => {
+        expect(screen.getByRole('listbox')).toBeInTheDocument()
+      })
+      expect(screen.getByText('חלב סויה')).toBeInTheDocument()
+      expect(screen.queryByText('חלב שקדים')).not.toBeInTheDocument()
+    })
+  })
+
   describe('attached categories – empty-state CTA and add-from-categories button', () => {
     const workspaceCategories = [
       { id: 'c1', nameHe: 'מוצרי חלב', iconId: 'dairy', imageUrl: null, sortOrder: 0, workspaceId: 'ws1', version: 1 },
@@ -1869,5 +1920,112 @@ describe('ListDetail', () => {
         expect(screen.queryByTestId('product-bank-sheet')).not.toBeInTheDocument()
       })
     })
+  })
+})
+
+describe('ListDetail – auto-add badge', () => {
+  const originalFetch = globalThis.fetch
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+    queryClient.clear()
+    localStorage.clear()
+    useAuthStore.getState().setAuth({
+      token: 'test-token',
+      userId: 'u1',
+      email: 'test@test.com',
+      phone: null,
+      displayName: 'Test',
+      profileImageUrl: null,
+      locale: 'he',
+    })
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  function mockFetchWithAutoAddRules(rules: object[]) {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/auto-add')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(rules),
+        })
+      }
+      if (url.includes('/api/lists/list1/items')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(mockItems),
+        })
+      }
+      if (url.includes('/api/lists/list1')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(mockList),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) })
+    })
+  }
+
+  it('shows a green clock badge with the rule definition for items with a rule', async () => {
+    mockFetchWithAutoAddRules([
+      {
+        id: 'rule1',
+        listId: 'list1',
+        productId: 'p1',
+        customNameHe: null,
+        quantity: 2,
+        unit: 'ליטר',
+        everyN: 1,
+        everyUnit: 'WEEKS',
+        enabled: true,
+        nextRunAt: '2026-10-01T05:00:00Z',
+        version: 1,
+      },
+    ])
+    render(
+      <Wrapper>
+        <ListDetail />
+      </Wrapper>
+    )
+    await waitFor(() => {
+      expect(screen.getByText('חלב')).toBeInTheDocument()
+    })
+
+    // Only חלב (p1) has a rule; לחם (p2) has none
+    const badges = await screen.findAllByTestId('auto-add-badge')
+    expect(badges).toHaveLength(1)
+    // Indication styling, not a button
+    expect(badges[0].tagName).toBe('SPAN')
+    expect(badges[0].querySelector('svg')).toHaveAttribute('stroke', '#2e7d32')
+
+    // No native (slow) title tooltip; the custom one appears quickly on hover
+    expect(badges[0]).not.toHaveAttribute('title')
+    expect(screen.queryByTestId('auto-add-tooltip')).not.toBeInTheDocument()
+    fireEvent.mouseEnter(badges[0])
+    const tip = await screen.findByTestId('auto-add-tooltip')
+    expect(tip).toHaveTextContent('הוספה אוטומטית: 2 × כל 1 שבועות')
+    fireEvent.mouseLeave(badges[0])
+    await waitFor(() => {
+      expect(screen.queryByTestId('auto-add-tooltip')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows no badge when no rules exist', async () => {
+    mockFetchWithAutoAddRules([])
+    render(
+      <Wrapper>
+        <ListDetail />
+      </Wrapper>
+    )
+    await waitFor(() => {
+      expect(screen.getByText('חלב')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('auto-add-badge')).not.toBeInTheDocument()
   })
 })
